@@ -23,7 +23,6 @@ resolution-markers = [
 members = [
     "openpi",
     "openpi-client",
-    "pyav",
 ]
 overrides = [
     { name = "ml-dtypes", specifier = "==0.4.1" },
@@ -3668,17 +3667,6 @@ sdist = { url = "https://mirrors.ustc.edu.cn/pypi/packages/e9/e6/78ebbb10a8c8e4b
 wheels = [
     { url = "https://mirrors.ustc.edu.cn/pypi/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl", hash = "sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a", size = 181259, upload-time = "2025-03-28T02:41:19.028Z" },
 ]
-
-[[package]]
-name = "pyav"
-version = "12.0.5"
-source = { editable = "packages/pyav" }
-dependencies = [
-    { name = "av" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "av", specifier = ">=12.0.5" }]
 
 [[package]]
 name = "pycparser"

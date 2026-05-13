@@ -1,0 +1,7 @@
+[tasks]:
+
+1. Restock snacks of the same specification from the replenishment bin to the front of out-of-stock slots.
+
+2. Reach into the replenishment bin and pick an object. Identify its type and size. Move the object to the designated shelf area. Align the object with one of the four parallel lines based on its specification. Lower the object gently into the empty slot, ensuring it is perfectly centered within the line and oriented identically to the existing shelf structure. Execute the motion with a continuous, fluid trajectory to avoid shaking.
+
+3. Pick up an item from the replenishment box with a top-down grasp. Transfer it to the other hand by grasping the middle. Place the item on the shelf.
