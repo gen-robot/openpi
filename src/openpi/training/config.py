@@ -725,45 +725,13 @@ _CONFIGS = [
     #
     # Inference Aloha configs.
     #
-    #### Restock 1
-    TrainConfig(
-        name="restock_goods_beijing_chengdu_sm2sm",
-        model=pi0_config.Pi0Config(action_horizon=20,max_token_len=100),
-        data=LeRobotX2robotDataConfig(
-            # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
-            repo_id="restock_chips_pys_0430,restock_cola_viee_hzp_0422,restock_cola_xpc_0429,restock_viee_water_cjx_0427,restock_water_pys_0423,restock_chips_xpc_0428,restock_cola_viee_water_chips_pys_0430,restock_mix_cjx_0429,restock_viee_water_hzp_0422,restore_viee_water_pys_0423,restock_chips_xpc_0429,restock_cola_viee_water_chips_xpc_0504,restock_viee_chips_cjx_0427 ,restock_viee_xpc_0503,restore_water_chips_pys_0423,restock_cola_chips_pys_0430,restock_cola_viee_xpc_0504,restock_viee_chips_hzp_0422,restock_water_chips_cjx_0427,retock_cola_viee_water_chips_cjx_0428,restock_cola_chips_xpc_0504,restock_cola_water_huzp_0422,restock_viee_hzp_0425,restock_water_chips_cjx_0428,retock_cola_water_cjx_0427,restock_cola_viee_chips_pys_0430,restock_cola_water_xpc_0504,restock_viee_hzp_0428,restock_water_cjx_0424,restock_cola_viee_chips_xpc_0503,restock_cola_xpc_0428,restock_viee_water_chips_xpc_0503,restock_water_hzp_0421",
-            assets=AssetsConfig(asset_id="restock_goods_beijing_chengdu_sm2sm"),
-            mode="sm2sm",
-            state_history_size=3,
-            state_future_size=2,
-            # only_right_obs=True,
-            action_dim=28,
-            # Prompt/metadata support:
-            # - When enabled, prompt is derived from task_index -> meta/tasks.jsonl.
-            # - If the dataset has a string feature named "meta" (e.g. "[operator]:pys"), it can be appended
-            #   and dropped with probability p via CLI: --data.prompt-meta-dropout-p 0.5
-            prompt_from_task=True,
-            prompt_meta_key="meta",
-            prompt_meta_dropout_p=0.5,
-            prompt_meta_dropout_seed=42,
-            # random_drop_master=0.10,
-            # random_drop_history=0.50,
-            # random_drop_future=0.50,
-            # random_pos_offset=0.020,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
-        batch_size=128,
-        exp_name="restock_goods_beijing_chengdu_sm2sm_h3f2_a20_dm10dh50df50po20",
-        num_workers = 28
-    ),
-    #### Restock 2 
     TrainConfig(
         name="restock_2_goods_sm2sm",
         model=pi0_config.Pi0Config(action_horizon=20,max_token_len=100),
         data=LeRobotX2robotDataConfig(
             # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
-            repo_id="restock_2_cola_xpc_0513,restock_2_redbull_xpc_0509,restock_2_redbull_xpc_0512,restock_2_sodawater_xpc_0513,restock_2_sprite_xpc_0511,restock_2_sprite_xpc_0512,restock_2_sprite_xpc_0513,restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_redbull_sodawater_xpc_0513,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521",
-            assets=AssetsConfig(asset_id="restock_2_goods_0521_sm2sm"),
+            repo_id="restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_cola_xpc_0513,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513,restock_2_sprite_xpc_0513_pr5,restock_2_4sku_xpc_0527,restock_2_4sku_xpc_0528",
+            assets=AssetsConfig(asset_id="restock_2_goods_0528_sm2sm"),
             mode="sm2sm",
             state_history_size=3,
             state_future_size=2,
@@ -784,7 +752,7 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
         batch_size=128,
-        exp_name="restock_2_goods_0521_sm2sm_h3f2_a20_dm10dh50df50po20",
+        exp_name="restock_2_goods_0528_sm2sm_h3f2_a20_dm10dh50df50po20",
         num_workers = 28
     ),
     TrainConfig(
@@ -792,8 +760,8 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(action_horizon=20,max_token_len=100),
         data=LeRobotX2robotDataConfig(
             # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
-            repo_id="restock_1_4sku_hzp_0518,restock_1_4sku_ls_0518,restock_1_4sku_xpc_0518,restock_1_4sku_ls_0519,restock_1_4sku_xpc_0519,restock_1_4sku_xpc_0520,restock_1_4sku_ly_0521",
-            assets=AssetsConfig(asset_id="restock_1_goods_0521_sm2sm"),
+            repo_id="restock_1_4sku_hzp_0518,restock_1_4sku_ls_0518,restock_1_4sku_xpc_0518,restock_1_4sku_ls_0519,restock_1_4sku_xpc_0519,restock_1_4sku_xpc_0520,restock_1_4sku_ly_0521,restock_1_4sku_xpc_0523,restock_1_4sku_xpc_0529",
+            assets=AssetsConfig(asset_id="restock_1_goods_0530_sm2sm"),
             mode="sm2sm",
             state_history_size=3,
             state_future_size=2,
@@ -814,7 +782,7 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
         batch_size=128,
-        exp_name="restock_1_goods_0521_sm2sm_h3f2_a20_dm10dh50df50po20",
+        exp_name="restock_1_goods_0530_sm2sm_h3f2_a20_dm10dh50df50po20",
         num_workers = 28
     ),
     TrainConfig(
@@ -845,6 +813,96 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
         batch_size=128,
         exp_name="restock_multi_goods_0519_sm2sm_h3f2_a20_dm10dh50df50po20",
+        num_workers = 56
+    ),
+    TrainConfig(
+        name="restock_multi_goods_pi05_sm2sm",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=20, max_token_len=400),
+        data=LeRobotX2robotDataConfig(
+            # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
+            repo_id="restock_1_4sku_hzp_0518,restock_1_4sku_ls_0518,restock_1_4sku_ls_0519,restock_1_4sku_ly_0521,restock_1_4sku_xpc_0518,restock_1_4sku_xpc_0519,restock_1_4sku_xpc_0520,restock_1_4sku_xpc_0523,restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_4sku_xpc_0522,restock_2_cola_xpc_0513,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513,restock_2_sprite_xpc_0513_pr5",
+            assets=AssetsConfig(asset_id="restock_multi_goods_0527_pi05_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            # only_right_obs=True,
+            action_dim=28,
+            # Prompt/metadata support:
+            # - When enabled, prompt is derived from task_index -> meta/tasks.jsonl.
+            # - If the dataset has a string feature named "meta" (e.g. "[operator]:pys"), it can be appended
+            #   and dropped with probability p via CLI: --data.prompt-meta-dropout-p 0.5
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            # random_drop_master=0.10,
+            # random_drop_history=0.50,
+            # random_drop_future=0.50,
+            # random_pos_offset=0.020,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi05_base/params"),
+        batch_size=128,
+        exp_name="restock_multi_goods_0527_pi05_sm2sm_h3f2_a20_dm10dh50df50po20",
+        num_workers = 56
+    ),
+    TrainConfig(
+        name="restock_1_goods_pi05_sm2sm",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=20, max_token_len=400),
+        data=LeRobotX2robotDataConfig(
+            # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
+            repo_id="restock_1_4sku_hzp_0518,restock_1_4sku_ls_0518,restock_1_4sku_ls_0519,restock_1_4sku_ly_0521,restock_1_4sku_xpc_0518,restock_1_4sku_xpc_0519,restock_1_4sku_xpc_0520,restock_1_4sku_xpc_0523",
+            assets=AssetsConfig(asset_id="restock_1_goods_0527_pi05_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            # only_right_obs=True,
+            action_dim=28,
+            # Prompt/metadata support:
+            # - When enabled, prompt is derived from task_index -> meta/tasks.jsonl.
+            # - If the dataset has a string feature named "meta" (e.g. "[operator]:pys"), it can be appended
+            #   and dropped with probability p via CLI: --data.prompt-meta-dropout-p 0.5
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            # random_drop_master=0.10,
+            # random_drop_history=0.50,
+            # random_drop_future=0.50,
+            # random_pos_offset=0.020,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi05_base/params"),
+        batch_size=128,
+        exp_name="restock_1_goods_0527_pi05_sm2sm_h3f2_a20_dm10dh50df50po20",
+        num_workers = 56
+    ),
+    TrainConfig(
+        name="restock_2_goods_pi05_sm2sm",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=20, max_token_len=1024),
+        data=LeRobotX2robotDataConfig(
+            # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
+            repo_id="restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_cola_xpc_0513,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513,restock_2_sprite_xpc_0513_pr5,restock_2_4sku_xpc_0527",
+            assets=AssetsConfig(asset_id="restock_2_goods_0527_pi05_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            # only_right_obs=True,
+            action_dim=28,
+            # Prompt/metadata support:
+            # - When enabled, prompt is derived from task_index -> meta/tasks.jsonl.
+            # - If the dataset has a string feature named "meta" (e.g. "[operator]:pys"), it can be appended
+            #   and dropped with probability p via CLI: --data.prompt-meta-dropout-p 0.5
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            # random_drop_master=0.10,
+            # random_drop_history=0.50,
+            # random_drop_future=0.50,
+            # random_pos_offset=0.020,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi05_base/params"),
+        batch_size=128,
+        exp_name="restock_2_goods_0527_pi05_sm2sm_h3f2_a20_dm10dh50df50po20",
         num_workers = 56
     ),
     TrainConfig(
