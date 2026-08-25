@@ -192,6 +192,35 @@ class ResizeImages(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class MaskImageUpperHalf(DataTransformFn):
+    """Randomly set the upper half of one model input image to black."""
+
+    image_key: str
+    probability: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.probability <= 1.0:
+            raise ValueError(f"Mask probability must be in [0, 1], got {self.probability}")
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.probability == 0.0 or (self.probability < 1.0 and np.random.random() >= self.probability):
+            return data
+
+        images = data["image"]
+        if self.image_key not in images:
+            raise KeyError(f"Image {self.image_key!r} not found; available images: {tuple(images)}")
+
+        image = np.asarray(images[self.image_key])
+        if image.ndim < 3:
+            raise ValueError(f"Expected image with at least 3 dimensions, got shape {image.shape}")
+
+        masked_image = image.copy()
+        masked_image[..., : image.shape[-3] // 2, :, :] = 0
+        images[self.image_key] = masked_image
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class SubsampleActions(DataTransformFn):
     stride: int
 

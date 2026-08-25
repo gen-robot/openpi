@@ -270,6 +270,10 @@ class LeRobotX2robotDataConfig(DataConfigFactory):
     random_drop_future: float = 0.
     random_pos_offset: float = 0.
     only_right_obs: bool = False
+    # Probability of replacing the upper half of the left wrist camera image with black pixels.
+    # Must be in [0, 1]: 0 disables masking and 1 always masks.
+    # This transform is shared by the training and inference pipelines.
+    mask_left_wrist_camera_upper_half: float = 0.0
     # When True, expects 28-D unified state/actions and slices based on mode in ArxInputs.
     unified_input: bool = False
     # When True, expects individual component keys in the dataset.
@@ -322,16 +326,40 @@ class LeRobotX2robotDataConfig(DataConfigFactory):
                 only_right_obs=self.only_right_obs,
                 unified_input=self.unified_input,
                 individual_keys=self.individual_keys,
+                use_delta_actions=self.use_delta_actions,
             )],
             outputs=[arx_policy.ArxOutputs(action_dim=self.action_dim)],
         )
-        if self.use_delta_actions:
-            delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1)
+        if self.mask_left_wrist_camera_upper_half:
             data_transforms = data_transforms.push(
-                inputs=[_transforms.DeltaActions(delta_action_mask)],
-                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+                inputs=[_transforms.MaskImageUpperHalf(
+                    "left_wrist_0_rgb",
+                    probability=self.mask_left_wrist_camera_upper_half,
+                )],
             )
+        # if self.use_delta_actions:
+        #     delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1)
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.DeltaActions(delta_action_mask)],
+        #         outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        #     )
 
+        # change
+        if self.use_delta_actions:
+            if self.mode == "sm2sm":
+                delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1, 6, -1, 6, -1)
+            else:
+                delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[arx_policy.ArxDeltaActions(
+                    mask=delta_action_mask,
+                    current_idx=self.state_history_size,
+                )],
+                outputs=[arx_policy.ArxAbsoluteActions(
+                    mask=delta_action_mask,
+                    current_idx=self.state_history_size,
+                )]
+            )
         model_transforms = ModelTransformFactory()(model_config)
 
         # Create base config and fix zero-variance dimensions if needed
@@ -658,7 +686,7 @@ class TrainConfig:
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
-    keep_period: int | None = 5000
+    keep_period: int | None = 10000
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -726,12 +754,295 @@ _CONFIGS = [
     # Inference Aloha configs.
     #
     TrainConfig(
+        name="bagging_sku_0804_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            repo_id="bagging_sku_fty_0702b,bagging_sku_fty_0703,bagging_sku_fty_0706+0707,bagging_sku_fty_0708,bagging_sku_fty_0715,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714,bagging_sku_fty_0715,bagging_sku_fty_0717,bagging_sku_zzc_0724,bagging_sku_zzc_0730,bagging_sku_zyx_0625",
+            assets=AssetsConfig(asset_id="bagging_sku_0804_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"
+        ),
+        batch_size=128,
+        exp_name="bagging_sku_0804_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b,bagging_sku_fty_0703,bagging_sku_fty_0706+0707,bagging_sku_fty_0708,bagging_sku_fty_0715,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714,bagging_sku_fty_0715,bagging_sku_fty_0717,bagging_sku_zzc_0724,bagging_sku_zzc_0730,bagging_sku_zyx_0625",
+            assets=AssetsConfig(asset_id="bagging_sku_0807_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0807_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0811_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b_trimmed,bagging_sku_fty_0703_trimmed,bagging_sku_fty_0706+0707,bagging_sku_fty_0708_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0717_trimmed,bagging_sku_zzc_0724_trimmed,bagging_sku_zzc_0730_trimmed,bagging_sku_zyx_0625,bagging_sku_zzc_0805_dagger,bagging_sku_zzc_0810",
+            assets=AssetsConfig(asset_id="bagging_sku_0811_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0811_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0811_pi05_sm2sm",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=20, max_token_len=800),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b_trimmed,bagging_sku_fty_0703_trimmed,bagging_sku_fty_0706+0707,bagging_sku_fty_0708_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0717_trimmed,bagging_sku_zzc_0724_trimmed,bagging_sku_zzc_0730_trimmed,bagging_sku_zyx_0625,bagging_sku_zzc_0805_dagger,bagging_sku_zzc_0810",
+            assets=AssetsConfig(asset_id="bagging_sku_0811_pi05_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            mask_left_wrist_camera_upper_half=1.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi05_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0811_dm10dh50df50po20_pi05_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0812_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b,bagging_sku_fty_0703,bagging_sku_fty_0706+0707,bagging_sku_fty_0708,bagging_sku_fty_0715,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714,bagging_sku_fty_0715,bagging_sku_fty_0717,bagging_sku_zzc_0724,bagging_sku_zzc_0730,bagging_sku_zyx_0625,bagging_sku_zzc_0805_dagger,bagging_sku_zzc_0810",
+            assets=AssetsConfig(asset_id="bagging_sku_0812_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0812_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0814_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b,bagging_sku_fty_0703,bagging_sku_fty_0706+0707,bagging_sku_fty_0708,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714,bagging_sku_fty_0715,bagging_sku_fty_0717,bagging_sku_zzc_0724,bagging_sku_zzc_0730,bagging_sku_zyx_0625,bagging_sku_zzc_0805_dagger,bagging_sku_zzc_0810,bagging_sku_fty_0813,bagging_sku_zzc_0811_1",
+            assets=AssetsConfig(asset_id="bagging_sku_0814_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            mask_left_wrist_camera_upper_half=1.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0814_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0817_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0706+0707_trimmed_compressed,bagging_sku_fty_0708_trimmed_compressed,bagging_sku_fty_0714_trimmed_compressed,bagging_sku_fty_0715_trimmed_compressed,bagging_sku_fty_0717_trimmed_compressed,bagging_sku_zzc_0724_trimmed_compressed,bagging_sku_zzc_0805_dagger_trimmed_compressed,bagging_sku_fty_0814_trimmed_compressed,bagging_sku_fty_0813_trimmed_compressed,bagging_sku_zzc_0811_1_trimmed_compressed",
+            assets=AssetsConfig(asset_id="bagging_sku_0817_masked_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            mask_left_wrist_camera_upper_half=1.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0817_masked_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0817_nomask_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0708_trimmed_compressed,bagging_sku_fty_0706+0707_trimmed_compressed,bagging_sku_fty_0714_trimmed_compressed,bagging_sku_fty_0715_trimmed_compressed,bagging_sku_fty_0717_trimmed_compressed,bagging_sku_zzc_0724_trimmed_compressed,bagging_sku_zzc_0805_dagger_trimmed_compressed,bagging_sku_fty_0814_trimmed_compressed,bagging_sku_fty_0813_trimmed_compressed,bagging_sku_zzc_0811_1_trimmed_compressed",
+            assets=AssetsConfig(asset_id="bagging_sku_0817_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0817_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0819_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b_trimmed,bagging_sku_fty_0703_trimmed,bagging_sku_fty_0706+0707_trimmed_compressed,bagging_sku_fty_0708_trimmed_compressed,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714_trimmed_compressed,bagging_sku_fty_0715_trimmed_compressed,bagging_sku_fty_0717_trimmed_compressed,bagging_sku_zzc_0724_trimmed_compressed,bagging_sku_zzc_0805_dagger_trimmed_compressed,bagging_sku_zzc_0810,bagging_sku_fty_0814_trimmed_compressed,bagging_sku_fty_0813_trimmed_compressed,bagging_sku_zzc_0811_1_trimmed_compressed",
+            assets=AssetsConfig(asset_id="bagging_sku_0819_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            mask_left_wrist_camera_upper_half=1.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0819_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0821_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b_trimmed,bagging_sku_fty_0703_trimmed,bagging_sku_fty_0706+0707,bagging_sku_fty_0708_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0717_trimmed,bagging_sku_zzc_0724_trimmed,bagging_sku_zzc_0730_trimmed,bagging_sku_zyx_0625,bagging_sku_zzc_0805_dagger,bagging_sku_zzc_0810,bagging_sku_fty_0813_trimmed_compressed,bagging_sku_fty_0814_trimmed_compressed,bagging_sku_zzc_0811_1_trimmed_compressed",
+            assets=AssetsConfig(asset_id="bagging_sku_0821_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0821_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0823_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_fty_0702b_trimmed,bagging_sku_fty_0703_trimmed,bagging_sku_fty_0706+0707_trimmed_compressed,bagging_sku_fty_0708_trimmed_compressed,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714_trimmed_compressed,bagging_sku_fty_0715_trimmed_compressed,bagging_sku_fty_0717_trimmed_compressed,bagging_sku_zzc_0724_trimmed_compressed,bagging_sku_zzc_0805_dagger_trimmed_compressed,bagging_sku_zzc_0810,bagging_sku_fty_0814_trimmed_compressed,bagging_sku_fty_0813_trimmed_compressed,bagging_sku_zzc_0811_1_trimmed_compressed",
+            assets=AssetsConfig(asset_id="bagging_sku_0823_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            # mask_left_wrist_camera_upper_half=1.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0823_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
+        name="bagging_sku_0824_sm2sm",
+        model=pi0_config.Pi0Config(action_horizon=20),
+        data=LeRobotX2robotDataConfig(
+            # repo_id="bagging_4sku_zyx_0528_dagger_filter_static,bagging_4sku_ny_0501_filtered,bagging_4sku_xpc_0430_filter_static,bagging_4sku_xpc_0501_filter_static,bagging_sku_fty_0706+0707,bagging_4sku_xpc_0502_filter_static,bagging_sku_fty_0708,bagging_4sku_xpc_0505_filter_static,bagging_sku_fty_0713_dagger_filtered,bagging_4sku_xpc_0506_filter_static,bagging_sku_fty_0714,bagging_4sku_xpc_0507_filter_static,bagging_sku_fty_0715,bagging_4sku_zyx_0421,bagging_sku_fty_0717,bagging_4sku_zyx_0423_filter_static,bagging_sku_zyx_0625,bagging_4sku_zyx_0425_filter_static,bagging_sku_zzc_0724,bagging_4sku_zyx_0509_filter_static,bagging_sku_zzc_0730,bagging_4sku_zyx_0512_dagger_filter_static,bagging_4sku_zyx_0515_filter_static,bagging_4sku_zyx_0518_filter_static,bagging_4sku_zyx_0519_filter_static,bagging_4sku_zyx_0522_filter_static,bagging_4sku_zyx_0526_dagger_filter_static",
+            repo_id="bagging_sku_zyx_0625,bagging_sku_fty_0702b_trimmed,bagging_sku_fty_0703_trimmed,bagging_sku_fty_0706+0707,bagging_sku_fty_0708_trimmed,bagging_sku_fty_0713_dagger_filtered,bagging_sku_fty_0714_trimmed,bagging_sku_fty_0715_trimmed,bagging_sku_fty_0717_trimmed,bagging_sku_zzc_0724_trimmed,bagging_sku_zzc_0730_trimmed,bagging_sku_zzc_0805_dagger_trimmed,bagging_sku_zzc_0810,bagging_sku_fty_0814_trimmed,bagging_sku_fty_0813_trimmed,bagging_sku_zzc_0811_1_trimmed_compressed",
+            assets=AssetsConfig(asset_id="bagging_sku_0824_sm2sm"),
+            mode="sm2sm",
+            state_history_size=3,
+            state_future_size=2,
+            slave_state_dim=14,
+            action_dim=28,
+            prompt_from_task=True,
+            prompt_meta_key="meta",
+            prompt_meta_dropout_p=0.5,
+            prompt_meta_dropout_seed=42,
+            mask_left_wrist_camera_upper_half=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=128,
+        exp_name="bagging_sku_0824_dm10dh50df50po20_meta",
+        num_workers=32,
+        num_train_steps=300_000,
+    ),
+    TrainConfig(
         name="restock_2_goods_sm2sm",
         model=pi0_config.Pi0Config(action_horizon=20,max_token_len=100),
         data=LeRobotX2robotDataConfig(
             # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
-            repo_id="restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_cola_xpc_0513,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513,restock_2_sprite_xpc_0513_pr5,restock_2_4sku_xpc_0527,restock_2_4sku_xpc_0528",
-            assets=AssetsConfig(asset_id="restock_2_goods_0528_sm2sm"),
+            repo_id="restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513_pr5,restock_2_4sku_xpc_0527,restock_2_4sku_xpc_0528",
+            assets=AssetsConfig(asset_id="restock_2_goods_0601_sm2sm"),
             mode="sm2sm",
             state_history_size=3,
             state_future_size=2,
@@ -752,7 +1063,7 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
         batch_size=128,
-        exp_name="restock_2_goods_0528_sm2sm_h3f2_a20_dm10dh50df50po20",
+        exp_name="restock_2_goods_0601_sm2sm_h3f2_a20_dm10dh50df50po20",
         num_workers = 28
     ),
     TrainConfig(
@@ -827,10 +1138,6 @@ _CONFIGS = [
             state_future_size=2,
             # only_right_obs=True,
             action_dim=28,
-            # Prompt/metadata support:
-            # - When enabled, prompt is derived from task_index -> meta/tasks.jsonl.
-            # - If the dataset has a string feature named "meta" (e.g. "[operator]:pys"), it can be appended
-            #   and dropped with probability p via CLI: --data.prompt-meta-dropout-p 0.5
             prompt_from_task=True,
             prompt_meta_key="meta",
             prompt_meta_dropout_p=0.5,
@@ -880,8 +1187,8 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=20, max_token_len=1024),
         data=LeRobotX2robotDataConfig(
             # All local LeRobot datasets under /mnt/public/gaojiahuan/huggingface/lerobot (with meta/info.json).
-            repo_id="restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_cola_xpc_0513,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513,restock_2_sprite_xpc_0513_pr5,restock_2_4sku_xpc_0527",
-            assets=AssetsConfig(asset_id="restock_2_goods_0527_pi05_sm2sm"),
+            repo_id="restock_2_4sku_xpc_0514,restock_2_4sku_xpc_0515,restock_2_4sku_xpc_0516,restock_2_4sku_xpc_0517,restock_2_4sku_xpc_0520,restock_2_4sku_xpc_0521,restock_2_cola_xpc_0513_pr5,restock_2_redbull_sodawater_xpc_0513,restock_2_redbull_xpc_0509_pr5,restock_2_redbull_xpc_0512_pr5,restock_2_sodawater_xpc_0513_pr5,restock_2_sprite_xpc_0511_pr5,restock_2_sprite_xpc_0512_pr5,restock_2_sprite_xpc_0513_pr5,restock_2_4sku_xpc_0527,restock_2_4sku_xpc_0528",
+            assets=AssetsConfig(asset_id="restock_2_goods_0601_pi05_sm2sm"),
             mode="sm2sm",
             state_history_size=3,
             state_future_size=2,
@@ -902,7 +1209,7 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi05_base/params"),
         batch_size=128,
-        exp_name="restock_2_goods_0527_pi05_sm2sm_h3f2_a20_dm10dh50df50po20",
+        exp_name="restock_2_goods_0601_pi05_sm2sm_h3f2_a20_dm10dh50df50po20",
         num_workers = 56
     ),
     TrainConfig(

@@ -140,6 +140,7 @@ venv.bak/
 
 # Local debug dumps
 debug_dumps/
+attention_results/
 
 # Spyder project settings
 .spyderproject

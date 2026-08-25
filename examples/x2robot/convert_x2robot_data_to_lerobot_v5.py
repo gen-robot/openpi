@@ -41,14 +41,14 @@ os.environ['SVT_LOG'] = '0'
 @dataclass
 class ConvertArgs:
     raw_paths: list[str] = dataclasses.field(
-        default_factory=lambda: ['/mnt/resource/restock_multiple_lines/restock_4sku/beijing_xiapengcheng_20260529_am'],
+        default_factory=lambda: ['/mnt/public/datasets/standardized_v1/x2robot/bagging_sku/beijing_fantianyu_20260814'],
     )
-    repo_name: str = "restock_1_4sku_xpc_0529"
+    repo_name: str = "bagging_sku_fty_0814"
     # Task text only. This is what will be stored in `meta/tasks.jsonl` and used for `task_index -> prompt`.
-    task_text: str = "[task]:Identify the item type in the bin first, then pick up items in it from left to right and top to bottom, using the right hand for tea or water and the left hand for cola or Sprite. Grasp from above, transfer it to the other hand by grasping the middle, and place the item in the empty slot before the identical item to extend the row without touching other items."
+    task_text: str = "[task]:Grasp the four items in the checkout area one by one, pass them through the scanner, put them into the paper bag, and finally lift the bag."
     # Optional metadata string that can be appended to the prompt during training, e.g. "[operator]:pys".
     # This will be stored as a separate string feature in parquet (key: "meta").
-    meta: str = "[operator]:xpc."
+    meta: str = "[operator]:fty."
     # Backward-compatible field (deprecated). If provided (non-empty), we will treat it as `task_text`
     # and set `meta=""` unless `--meta` is explicitly set.
     task: str = ""

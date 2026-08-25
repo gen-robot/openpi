@@ -67,6 +67,47 @@ def test_make_bool_mask():
     assert _transforms.make_bool_mask(2, 0, 2) == (True, True, True, True)
 
 
+def test_mask_image_upper_half():
+    left_image = np.full((5, 4, 3), 255, dtype=np.uint8)
+    right_image = np.full((5, 4, 3), 127, dtype=np.uint8)
+    data = {"image": {"left_wrist_0_rgb": left_image, "right_wrist_0_rgb": right_image}}
+
+    transformed = _transforms.MaskImageUpperHalf("left_wrist_0_rgb")(data)
+
+    assert np.all(transformed["image"]["left_wrist_0_rgb"][:2] == 0)
+    assert np.all(transformed["image"]["left_wrist_0_rgb"][2:] == 255)
+    assert np.all(transformed["image"]["right_wrist_0_rgb"] == 127)
+    assert np.all(left_image == 255)  # The source array is not mutated.
+
+
+def test_mask_image_upper_half_supports_leading_dimensions():
+    image = np.ones((2, 6, 4, 3), dtype=np.float32)
+
+    transformed = _transforms.MaskImageUpperHalf("left")({"image": {"left": image}})
+
+    assert np.all(transformed["image"]["left"][:, :3] == 0)
+    assert np.all(transformed["image"]["left"][:, 3:] == 1)
+
+
+def test_mask_image_upper_half_probability(monkeypatch):
+    image = np.ones((6, 4, 3), dtype=np.float32)
+    transform = _transforms.MaskImageUpperHalf("left", probability=0.25)
+
+    monkeypatch.setattr(_transforms.np.random, "random", lambda: 0.24)
+    masked = transform({"image": {"left": image}})
+    assert np.all(masked["image"]["left"][:3] == 0)
+
+    monkeypatch.setattr(_transforms.np.random, "random", lambda: 0.25)
+    unmasked = transform({"image": {"left": image}})
+    assert unmasked["image"]["left"] is image
+
+
+@pytest.mark.parametrize("probability", [-0.1, 1.1])
+def test_mask_image_upper_half_rejects_invalid_probability(probability):
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        _transforms.MaskImageUpperHalf("left", probability=probability)
+
+
 def test_tokenize_prompt():
     tokenizer = _tokenizer.PaligemmaTokenizer(max_len=12)
     transform = _transforms.TokenizePrompt(tokenizer)

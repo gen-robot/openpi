@@ -394,7 +394,7 @@ def create_torch_dataset(
             if getattr(data_config, "prompt_meta_key", None):
                 dropout_p = float(getattr(data_config, "prompt_meta_dropout_p", 0.0) or 0.0)
                 seed = int(getattr(data_config, "prompt_meta_dropout_seed", 0) or 0)
-                if split != "train":
+                if split == "val":
                     dropout_p = 0.0
                 prompt_transforms.append(
                     _transforms.AppendMetaToPrompt(
