@@ -11,6 +11,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.experimental
 import jax.numpy as jnp
+import numpy as np
 import optax
 import tqdm_loggable.auto as tqdm
 import wandb
@@ -190,6 +191,33 @@ def train_step(
     return new_state, info
 
 
+@at.typecheck
+def validation_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+) -> dict[str, at.Array]:
+    """Compute validation loss without updating model parameters."""
+    # Use EMA params if available, otherwise use current params
+    params = state.ema_params if state.ema_params is not None else state.params
+    model = nnx.merge(state.model_def, params)
+    model.eval()
+
+    @at.typecheck
+    def loss_fn(
+        model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
+    ):
+        chunked_loss = model.compute_loss(rng, observation, actions, train=False)
+        return jnp.mean(chunked_loss)
+
+    val_rng = jax.random.fold_in(rng, state.step)
+    observation, actions = batch
+    loss = loss_fn(model, val_rng, observation, actions)
+
+    return {"val_loss": loss}
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -213,18 +241,38 @@ def main(config: _config.TrainConfig):
         keep_period=config.keep_period,
         overwrite=config.overwrite,
         resume=config.resume,
+        save_full_state=config.save_full_state,
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
-        num_workers=config.num_workers,
         shuffle=True,
+        split="train",
     )
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
+
+    # Create validation data loader (with shuffle for better IID) only if validation is enabled
+    val_iter = None
+    if config.valid:
+        val_loader = _data_loader.create_data_loader(
+            config,
+            sharding=data_sharding,
+            shuffle=True,
+            split="val",
+        )
+        val_iter = iter(val_loader)  # Create persistent validation iterator
+        logging.info(f"Initialized validation data loader")
+
+    # Log images from first batch to sanity check.
+    images_to_log = [
+        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+        for i in range(min(5, len(next(iter(batch[0].images.values())))))
+    ]
+    wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
@@ -239,6 +287,15 @@ def main(config: _config.TrainConfig):
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
     )
+    
+    # Only compile validation step if validation is enabled
+    pval_step = None
+    if config.valid:
+        pval_step = jax.jit(
+            functools.partial(validation_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
+        )
 
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
@@ -256,6 +313,20 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            
+            # Run validation on a few batches only if validation is enabled
+            if config.valid and val_iter is not None:
+                val_losses = []
+                num_val_batches = 10  # Fixed number of validation batches per step
+                for _ in range(num_val_batches):
+                    val_batch = next(val_iter)  # Use persistent iterator
+                    with sharding.set_mesh(mesh):
+                        val_info = pval_step(train_rng, train_state, val_batch)
+                    val_losses.append(val_info["val_loss"])
+                
+                if val_losses:
+                    reduced_info["val_loss"] = float(jax.device_get(jnp.mean(jnp.array(val_losses))))
+            
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
@@ -263,7 +334,7 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step, save_full_state=config.save_full_state)
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

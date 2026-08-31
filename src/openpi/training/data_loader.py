@@ -1,8 +1,9 @@
 from collections.abc import Iterator, Sequence
+import logging
 import multiprocessing
 import os
 import typing
-from typing import Protocol, SupportsIndex, TypeVar
+from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +13,7 @@ import torch
 
 import openpi.models.model as _model
 import openpi.training.config as _config
+from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -22,6 +24,16 @@ class Dataset(Protocol[T_co]):
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
         raise NotImplementedError("Subclasses of Dataset should implement __getitem__.")
+
+    def __len__(self) -> int:
+        raise NotImplementedError("Subclasses of Dataset should implement __len__.")
+
+
+class IterableDataset(Protocol[T_co]):
+    """Interface for an iterable dataset."""
+
+    def __iter__(self) -> Iterator[T_co]:
+        raise NotImplementedError("Subclasses of IterableDataset should implement __iter__.")
 
     def __len__(self) -> int:
         raise NotImplementedError("Subclasses of Dataset should implement __len__.")
@@ -38,6 +50,119 @@ class DataLoader(Protocol[T_co]):
         raise NotImplementedError("Subclasses of DataLoader should implement __iter__.")
 
 
+class FilteredLeRobotDataset(lerobot_dataset.LeRobotDataset):
+    """Fixed LeRobotDataset that properly handles episode filtering.
+    
+    LeRobot has a bug where when using episodes=[131, 19, 81], the episode_data_index
+    is correctly created with N entries (one per filtered episode), but hf_dataset's 
+    episode_index column retains original values (e.g., 131, 19, 81). 
+    The _get_query_indices method then tries to access episode_data_index["from"][131] 
+    which is out of bounds.
+    
+    This subclass fixes the bug by maintaining an episode index mapping based on
+    the actual order of episodes in the filtered dataset.
+    """
+    
+    def __init__(self, *args, episodes: list[int] | None = None, **kwargs):
+        # Store the episodes list before calling parent __init__
+        self._filtered_episodes = episodes
+        self._episode_index_map: dict[int, int] | None = None
+        
+        super().__init__(*args, episodes=episodes, **kwargs)
+        
+        # Build the episode index mapping after parent init
+        # IMPORTANT: Map based on actual order in episode_data_index, not sorted order
+        if episodes is not None and len(self.episode_data_index["from"]) > 0:
+            self._episode_index_map = {}
+            for new_idx in range(len(self.episode_data_index["from"])):
+                # Get the first sample index for this episode in episode_data_index
+                start_idx = self.episode_data_index["from"][new_idx].item()
+                # Get the original episode index from hf_dataset
+                orig_ep_idx = self.hf_dataset[start_idx]["episode_index"]
+                if hasattr(orig_ep_idx, 'item'):
+                    orig_ep_idx = orig_ep_idx.item()
+                self._episode_index_map[orig_ep_idx] = new_idx
+    
+    def _get_query_indices(self, idx: int, ep_idx: int) -> tuple[dict[str, list[int | bool]]]:
+        """Override to fix episode index mapping bug.
+        
+        ep_idx here is the ORIGINAL episode index from hf_dataset.
+        We need to remap it to access episode_data_index correctly.
+        """
+        # Remap the episode index if we're using filtered episodes
+        remapped_ep_idx = ep_idx
+        if self._episode_index_map is not None:
+            remapped_ep_idx = self._episode_index_map.get(ep_idx, ep_idx)
+        
+        # Now use remapped index to access episode_data_index
+        ep_start = self.episode_data_index["from"][remapped_ep_idx]
+        ep_end = self.episode_data_index["to"][remapped_ep_idx]
+        
+        query_indices = {
+            key: [max(ep_start.item(), min(ep_end.item() - 1, idx + delta)) for delta in delta_idx]
+            for key, delta_idx in self.delta_indices.items()
+        }
+        padding = {
+            f"{key}_is_pad": torch.BoolTensor(
+                [(idx + delta < ep_start.item()) | (idx + delta >= ep_end.item()) for delta in delta_idx]
+            )
+            for key, delta_idx in self.delta_indices.items()
+        }
+        return query_indices, padding
+    
+    def _query_videos(self, query_timestamps: dict[str, list[float]], ep_idx: int):
+        """Override to use original episode index for video file paths.
+        
+        ep_idx here is the ORIGINAL episode index - we should NOT remap it
+        because video files are named using the original episode indices.
+        """
+        # Do NOT remap ep_idx here - video files use original episode indices
+        return super()._query_videos(query_timestamps, ep_idx)
+
+
+class MultiDataset(Dataset[T_co]):
+    """Dataset that combines multiple LeRobot datasets."""
+    
+    def __init__(self, datasets: Sequence[Dataset[T_co]]):
+        self._datasets = list(datasets)
+        self._cumulative_lengths = self._compute_cumulative_lengths()
+        
+    def _compute_cumulative_lengths(self) -> list[int]:
+        """Compute cumulative lengths for efficient indexing."""
+        cumulative_lengths = []
+        total = 0
+        for dataset in self._datasets:
+            total += len(dataset)
+            cumulative_lengths.append(total)
+        return cumulative_lengths
+        
+    def __getitem__(self, index: SupportsIndex) -> T_co:
+        idx = index.__index__()
+        if idx < 0:
+            idx += len(self)
+        if idx < 0 or idx >= len(self):
+            raise IndexError(f"Index {index} is out of range for dataset of length {len(self)}")
+            
+        # Find which dataset contains this index
+        dataset_idx = 0
+        for i, cumulative_length in enumerate(self._cumulative_lengths):
+            if idx < cumulative_length:
+                dataset_idx = i
+                break
+                
+        # Calculate the offset within the selected dataset
+        offset = idx
+        if dataset_idx > 0:
+            offset = idx - self._cumulative_lengths[dataset_idx - 1]
+            
+        return self._datasets[dataset_idx][offset]
+        
+    def __len__(self) -> int:
+        if not self._cumulative_lengths:
+            return 0
+        return self._cumulative_lengths[-1]
+
+
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
         self._dataset = dataset
@@ -45,6 +170,40 @@ class TransformedDataset(Dataset[T_co]):
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
         return self._transform(self._dataset[index])
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+
+class IterableTransformedDataset(IterableDataset[T_co]):
+    def __init__(
+        self,
+        dataset: IterableDataset,
+        transforms: Sequence[_transforms.DataTransformFn],
+        *,
+        is_batched: bool = False,
+    ):
+        self._dataset = dataset
+        self._transform = _transforms.compose(transforms)
+        self._is_batched = is_batched
+
+    def __iter__(self):
+        for sample in self._dataset:
+            if self._is_batched:
+                # Transforms are designed to be applied to individual samples. So we need to split the batch into
+                # individual samples and apply the transform to each sample individually.
+                batch_size = next(v.shape[0] for v in sample.values())
+
+                # Split batch into individual samples using tree_map
+                individual_samples = [jax.tree.map(lambda x: x[i], sample) for i in range(batch_size)]  # noqa: B023
+
+                # Transform each sample
+                transformed = [self._transform(s) for s in individual_samples]
+
+                # Recombine batch with tree_map
+                yield jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
+            else:
+                yield self._transform(sample)
 
     def __len__(self) -> int:
         return len(self._dataset)
@@ -81,28 +240,168 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
-def create_dataset(data_config: _config.DataConfig, model_config: _model.BaseModelConfig) -> Dataset:
-    """Create a dataset for training."""
+def create_torch_dataset(
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    model_config: _model.BaseModelConfig,
+    split: Literal["train", "val"] | None = None,
+    val_ratio: float = 0.1,
+    split_seed: int = 42,
+) -> Dataset:
+    """Create a dataset for training.
+    
+    Args:
+        data_config: The data configuration.
+        action_horizon: The action horizon.
+        model_config: The model configuration.
+        split: If "train" or "val", only load that split. If None, load all data.
+        val_ratio: Ratio of validation data (default 0.1 means 10% validation).
+        split_seed: Random seed for reproducible train/val splitting.
+    """
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
-
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id, local_files_only=data_config.local_files_only)
-    dataset = lerobot_dataset.LeRobotDataset(
-        data_config.repo_id,
-        delta_timestamps={
-            key: [t / dataset_meta.fps for t in range(model_config.action_horizon)]
+    
+    state_history_size = getattr(data_config, 'state_history_size', 0)
+    state_future_size = getattr(data_config, 'state_future_size', 0)
+    state_step = getattr(data_config, 'state_step', 1)
+    
+    def _build_delta_timestamps(fps: float) -> dict[str, list[float]]:
+        delta_ts = {
+            key: [t / fps for t in range(action_horizon)] 
             for key in data_config.action_sequence_keys
-        },
-        local_files_only=data_config.local_files_only,
+        }
+        if state_history_size > 0 or state_future_size > 0:
+            delta_ts['state'] = [t * state_step / fps for t in range(-state_history_size, state_future_size + 1)]
+        return delta_ts
+    
+    # Parse comma-separated repo_ids
+    repo_ids = [repo_id.strip() for repo_id in repo_id.split(",") if repo_id.strip()]
+    
+    # If only one dataset, use the original logic for backward compatibility
+    if len(repo_ids) == 1:
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        
+        # Determine which episodes to load based on split
+        episodes = None
+        if split is not None:
+            # Use metadata to get total number of episodes (no need to load full dataset)
+            total_episodes = dataset_meta.total_episodes
+            all_episode_indices = np.arange(total_episodes)
+            
+            # Shuffle with fixed seed for reproducibility
+            rng = np.random.RandomState(split_seed)
+            rng.shuffle(all_episode_indices)
+            
+            # Split into train/val
+            val_size = int(total_episodes * val_ratio)
+            if split == "val":
+                episodes = all_episode_indices[:val_size].tolist()
+                logging.info(f"Loading validation split: {len(episodes)} episodes out of {total_episodes}")
+            else:  # train
+                episodes = all_episode_indices[val_size:].tolist()
+                logging.info(f"Loading training split: {len(episodes)} episodes out of {total_episodes}")
+        
+        # Use FilteredLeRobotDataset only when episodes are filtered (split is not None)
+        # Otherwise use original LeRobotDataset to avoid any potential issues
+        if episodes is not None:
+            dataset = FilteredLeRobotDataset(
+                data_config.repo_id,
+                delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
+                episodes=episodes,
+            )
+        else:
+            dataset = lerobot_dataset.LeRobotDataset(
+                data_config.repo_id,
+                delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
+            )
+
+        if data_config.prompt_from_task:
+            dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+
+        return dataset
+    
+    # Multiple datasets case
+    datasets = []
+    all_tasks = set()
+    total_episodes_all = 0
+    
+    logging.info(f"Loading multiple datasets: {repo_ids}")
+    
+    for i, repo_id in enumerate(repo_ids):
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        all_tasks.update(dataset_meta.tasks)
+        total_episodes_all += dataset_meta.total_episodes
+        
+        # Determine which episodes to load based on split
+        episodes = None
+        if split is not None:
+            # Use metadata to get total number of episodes for this dataset
+            total_episodes = dataset_meta.total_episodes
+            all_episode_indices = np.arange(total_episodes)
+            
+            # Shuffle with fixed seed for reproducibility (different seed per dataset)
+            rng = np.random.RandomState(split_seed + i)
+            rng.shuffle(all_episode_indices)
+            
+            # Split into train/val
+            val_size = max(1, int(total_episodes * val_ratio))
+            if split == "val":
+                episodes = all_episode_indices[:val_size].tolist()
+                logging.info(f"Loading validation split for {repo_id}: {len(episodes)} episodes out of {total_episodes}")
+            else:  # train
+                episodes = all_episode_indices[val_size:].tolist()
+                logging.info(f"Loading training split for {repo_id}: {len(episodes)} episodes out of {total_episodes}")
+        else:
+            logging.info(f"Loading full dataset for {repo_id}: {dataset_meta.total_episodes} episodes")
+            
+        # Create dataset
+        if episodes is not None:
+            dataset = FilteredLeRobotDataset(
+                repo_id,
+                delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
+                episodes=episodes,
+            )
+        else:
+            dataset = lerobot_dataset.LeRobotDataset(
+                repo_id,
+                delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
+            )
+        
+        if data_config.prompt_from_task:
+            dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+            
+        datasets.append(dataset)
+    
+    # Combine all datasets
+    combined_dataset = MultiDataset(datasets)
+    logging.info(f"Combined {len(repo_ids)} datasets with total {len(combined_dataset)} samples")
+    
+    # If we have multiple datasets and prompt_from_task, log the tasks
+    if data_config.prompt_from_task and len(datasets) > 1:
+        logging.info(f"Combined dataset uses tasks from all datasets: {sorted(all_tasks)}")
+    
+    return combined_dataset
+
+
+def create_rlds_dataset(
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    batch_size: int,
+    *,
+    shuffle: bool = False,
+) -> Dataset:
+    # At the moment, we only support DROID for RLDS datasets.
+    return DroidRldsDataset(
+        data_dir=data_config.rlds_data_dir,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        action_chunk_size=action_horizon,
+        action_space=data_config.action_space,
+        datasets=data_config.datasets,
     )
-
-    if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
-
-    return dataset
 
 
 def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip_norm_stats: bool = False) -> Dataset:
@@ -127,19 +426,115 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
     )
 
 
+def transform_iterable_dataset(
+    dataset: IterableDataset,
+    data_config: _config.DataConfig,
+    *,
+    skip_norm_stats: bool = False,
+    is_batched: bool = False,
+) -> IterableDataset:
+    """Transform the dataset by applying the data transforms."""
+    norm_stats = {}
+    if data_config.repo_id != "fake" and not skip_norm_stats:
+        if data_config.norm_stats is None:
+            raise ValueError(
+                "Normalization stats not found. "
+                "Make sure to run `scripts/compute_norm_stats.py --config-name=<your-config>`."
+            )
+        norm_stats = data_config.norm_stats
+
+    return IterableTransformedDataset(
+        dataset,
+        [
+            *data_config.repack_transforms.inputs,
+            *data_config.data_transforms.inputs,
+            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            *data_config.model_transforms.inputs,
+        ],
+        is_batched=is_batched,
+    )
+
+
 def create_data_loader(
     config: _config.TrainConfig,
+    *,
+    sharding: jax.sharding.Sharding | None = None,
+    shuffle: bool = False,
+    num_batches: int | None = None,
+    skip_norm_stats: bool = False,
+    framework: Literal["jax", "pytorch"] = "jax",
+    split: Literal["train", "val"] | None = None,
+    val_ratio: float = 0.1,
+    split_seed: int = 42,
+) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
+    """Create a data loader for training.
+
+    Args:
+        config: The training configuration.
+        sharding: The sharding to use for the data loader (JAX only).
+        shuffle: Whether to shuffle the data.
+        num_batches: Determines the number of batches to return.
+        skip_norm_stats: Whether to skip data normalization.
+        framework: The framework to use ("jax" or "pytorch").
+        split: If "train" or "val", only load that split. If None, load all data.
+        val_ratio: Ratio of validation data (default 0.1 means 10% validation).
+        split_seed: Random seed for reproducible train/val splitting.
+    """
+    data_config = config.data.create(config.assets_dirs, config.model)
+    logging.info(f"data_config: {data_config}")
+
+    if data_config.rlds_data_dir is not None:
+        return create_rlds_data_loader(
+            data_config,
+            action_horizon=config.model.action_horizon,
+            batch_size=config.batch_size,
+            sharding=sharding,
+            shuffle=shuffle,
+            num_batches=num_batches,
+            skip_norm_stats=skip_norm_stats,
+            framework=framework,
+        )
+    return create_torch_data_loader(
+        data_config,
+        model_config=config.model,
+        action_horizon=config.model.action_horizon,
+        batch_size=config.batch_size,
+        sharding=sharding,
+        shuffle=shuffle,
+        num_batches=num_batches,
+        num_workers=config.num_workers,
+        seed=config.seed,
+        skip_norm_stats=skip_norm_stats,
+        framework=framework,
+        split=split,
+        val_ratio=val_ratio,
+        split_seed=split_seed,
+    )
+
+
+def create_torch_data_loader(
+    data_config: _config.DataConfig,
+    model_config: _model.BaseModelConfig,
+    action_horizon: int,
+    batch_size: int,
     *,
     sharding: jax.sharding.Sharding | None = None,
     skip_norm_stats: bool = False,
     shuffle: bool = False,
     num_batches: int | None = None,
     num_workers: int = 0,
+    seed: int = 0,
+    framework: str = "jax",
+    split: Literal["train", "val"] | None = None,
+    val_ratio: float = 0.1,
+    split_seed: int = 42,
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
     """Create a data loader for training.
 
     Args:
-        config: The training configuration.
+        data_config: The data configuration.
+        action_horizon: The action horizon.
+        batch_size: The batch size.
         sharding: The sharding to use for the data loader. If None, the data loader will
             use a single device sharding.
         skip_norm_stats: Whether to skip data normalization.
@@ -149,38 +544,93 @@ def create_data_loader(
             If not provided, will iterate over the dataset indefinitely.
         num_workers: The number of worker processes to use. If zero, the data loader will
             execute in the main process.
+        seed: The seed to use for shuffling the data.
+        split: If "train" or "val", only load that split. If None, load all data.
+        val_ratio: Ratio of validation data (default 0.1 means 10% validation).
+        split_seed: Random seed for reproducible train/val splitting.
     """
-    data_config = config.data.create(config.assets_dirs, config.model)
-
-    dataset = create_dataset(data_config, config.model)
+    dataset = create_torch_dataset(data_config, action_horizon, model_config, split=split, val_ratio=val_ratio, split_seed=split_seed)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
+    # Use TorchDataLoader for both frameworks
+    # For PyTorch DDP, create DistributedSampler and divide batch size by world size
+    # For JAX, divide by process count
+    sampler = None
+    if framework == "pytorch":
+        if torch.distributed.is_initialized():
+            sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset,
+                num_replicas=torch.distributed.get_world_size(),
+                rank=torch.distributed.get_rank(),
+                shuffle=shuffle,
+                drop_last=True,
+            )
+            local_batch_size = batch_size // torch.distributed.get_world_size()
+        else:
+            local_batch_size = batch_size
+    else:
+        local_batch_size = batch_size // jax.process_count()
+
+    logging.info(f"local_batch_size: {local_batch_size}")
     data_loader = TorchDataLoader(
         dataset,
-        local_batch_size=config.batch_size // jax.process_count(),
-        sharding=sharding,
-        shuffle=shuffle,
+        local_batch_size=local_batch_size,
+        sharding=None if framework == "pytorch" else sharding,
+        shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
+        sampler=sampler,
         num_batches=num_batches,
         num_workers=num_workers,
-        seed=config.seed,
+        seed=seed,
+        framework=framework,
     )
 
-    class DataLoaderImpl(DataLoader):
-        def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader):
-            self._data_config = data_config
-            self._data_loader = data_loader
+    return DataLoaderImpl(data_config, data_loader)
 
-        def data_config(self) -> _config.DataConfig:
-            return self._data_config
 
-        def __iter__(self):
-            for batch in self._data_loader:
-                yield _model.Observation.from_dict(batch), batch["actions"]
+def create_rlds_data_loader(
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    batch_size: int,
+    *,
+    sharding: jax.sharding.Sharding | None = None,
+    skip_norm_stats: bool = False,
+    shuffle: bool = False,
+    num_batches: int | None = None,
+    framework: str = "jax",
+) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
+    """Create an RLDS data loader for training.
+
+    Note: This data loader requires some extra dependencies -- see examples/droid/README_train.md
+
+    Args:
+        data_config: The data configuration.
+        action_horizon: The action horizon.
+        batch_size: The batch size.
+        sharding: The sharding to use for the data loader. If None, the data loader will
+            use a single device sharding.
+        skip_norm_stats: Whether to skip data normalization.
+        shuffle: Whether to shuffle the data.
+        num_batches: Determines the number of batches to return. If the number exceeds the
+            number of batches in the dataset, the data loader will loop over the dataset.
+            If not provided, will iterate over the dataset indefinitely.
+    """
+    if framework == "pytorch":
+        raise NotImplementedError("PyTorch RLDS data loader is not supported yet")
+    dataset = create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=shuffle)
+    dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats, is_batched=True)
+
+    data_loader = RLDSDataLoader(
+        dataset,
+        sharding=sharding,
+        num_batches=num_batches,
+    )
 
     return DataLoaderImpl(data_config, data_loader)
 
 
 class TorchDataLoader:
+    """Torch data loader implementation."""
+
     def __init__(
         self,
         dataset,
@@ -188,9 +638,11 @@ class TorchDataLoader:
         *,
         sharding: jax.sharding.Sharding | None = None,
         shuffle: bool = False,
+        sampler: torch.utils.data.Sampler | None = None,
         num_batches: int | None = None,
         num_workers: int = 0,
         seed: int = 0,
+        framework: str = "jax",
     ):
         """Create a PyTorch data loader.
 
@@ -213,14 +665,14 @@ class TorchDataLoader:
         if len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
 
-        if sharding is None:
-            # Use data parallel sharding by default.
-            sharding = jax.sharding.NamedSharding(
+        # Store sharding - None for PyTorch, JAX sharding for JAX
+        self._sharding = sharding
+        if sharding is None and framework == "jax":
+            # Use data parallel sharding by default for JAX only.
+            self._sharding = jax.sharding.NamedSharding(
                 jax.sharding.Mesh(jax.devices(), ("B",)),
                 jax.sharding.PartitionSpec("B"),
             )
-
-        self._sharding = sharding
         self._num_batches = num_batches
 
         mp_context = None
@@ -232,7 +684,8 @@ class TorchDataLoader:
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=local_batch_size,
-            shuffle=shuffle,
+            shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
+            sampler=sampler,
             num_workers=num_workers,
             multiprocessing_context=mp_context,
             persistent_workers=num_workers > 0,
@@ -258,14 +711,18 @@ class TorchDataLoader:
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
-                yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
+                if self._sharding is not None:
+                    yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                else:
+                    yield jax.tree.map(torch.as_tensor, batch)
 
 
 def _collate_fn(items):
     """Collate the batch elements into batched numpy arrays."""
     # Make sure to convert to numpy arrays before stacking since some of the incoming elements
     # may be JAX arrays.
-    return jax.tree.map(lambda *x: np.stack(np.asarray(x), axis=0), *items)
+    return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
 
 
 def _worker_init_fn(worker_id: int) -> None:
@@ -274,3 +731,60 @@ def _worker_init_fn(worker_id: int) -> None:
     # means that this approach will not work for selecting the backend.
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
+
+class RLDSDataLoader:
+    """Shallow wrapper around the DROID data loader to make it compatible with openpi.
+
+    All batching already happens in the DROID dataset, so we don't need to do anything here.
+    """
+
+    def __init__(
+        self,
+        dataset: DroidRldsDataset,
+        *,
+        sharding: jax.sharding.Sharding | None = None,
+        num_batches: int | None = None,
+    ):
+        self._dataset = dataset
+        self._num_batches = num_batches
+
+        if jax.process_count() > 1:
+            raise NotImplementedError("Data loading with multiple processes is not supported.")
+
+        if sharding is None:
+            # Use data parallel sharding by default.
+            sharding = jax.sharding.NamedSharding(
+                jax.sharding.Mesh(jax.devices(), ("B",)),
+                jax.sharding.PartitionSpec("B"),
+            )
+
+        self._sharding = sharding
+        self._num_batches = num_batches
+
+    def __iter__(self):
+        num_items = 0
+        while True:
+            data_iter = iter(self._dataset)
+            while True:
+                if self._num_batches is not None and num_items >= self._num_batches:
+                    return
+                try:
+                    batch = next(data_iter)
+                except StopIteration:
+                    break  # We've exhausted the dataset. Create a new iterator and start over.
+                num_items += 1
+                yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+
+
+class DataLoaderImpl(DataLoader):
+    def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
+        self._data_config = data_config
+        self._data_loader = data_loader
+
+    def data_config(self) -> _config.DataConfig:
+        return self._data_config
+
+    def __iter__(self):
+        for batch in self._data_loader:
+            yield _model.Observation.from_dict(batch), batch["actions"]

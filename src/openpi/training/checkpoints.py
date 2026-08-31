@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import asyncio
 import concurrent.futures as futures
 import dataclasses
 import logging
@@ -6,6 +9,7 @@ from typing import Protocol
 from etils import epath
 import jax
 import orbax.checkpoint as ocp
+import orbax.checkpoint.future as future
 
 from openpi.shared import array_typing as at
 import openpi.shared.normalize as _normalize
@@ -14,7 +18,7 @@ import openpi.training.utils as training_utils
 
 
 def initialize_checkpoint_dir(
-    checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
+    checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool, save_full_state: bool = True
 ) -> tuple[ocp.CheckpointManager, bool]:
     checkpoint_dir = epath.Path(checkpoint_dir).resolve()
     resuming = False
@@ -33,13 +37,17 @@ def initialize_checkpoint_dir(
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    # Configure item handlers based on save_full_state parameter
+    item_handlers = {
+        "assets": CallbackHandler(),
+        "params": ocp.PyTreeCheckpointHandler(),
+    }
+    if save_full_state:
+        item_handlers["train_state"] = ocp.PyTreeCheckpointHandler()
+
     mngr = ocp.CheckpointManager(
         checkpoint_dir,
-        item_handlers={
-            "assets": CallbackHandler(),
-            "train_state": ocp.PyTreeCheckpointHandler(),
-            "params": ocp.PyTreeCheckpointHandler(),
-        },
+        item_handlers=item_handlers,
         options=ocp.CheckpointManagerOptions(
             max_to_keep=1,
             keep_period=keep_period,
@@ -48,8 +56,8 @@ def initialize_checkpoint_dir(
         ),
     )
 
-    # special case: the checkpoint directory exists and the user requests to resume training, but the training run did
-    # not get to the first checkpoint saved. in this case, we don't actually want the train script to try and restore a
+    # Special case: the checkpoint directory exists and the user requests to resume training, but the training run did
+    # not get to the first checkpoint saved. In this case, we don't actually want the train script to try and restore a
     # checkpoint, since it will fail.
     if resuming and tuple(mngr.all_steps()) in [(), (0,)]:
         logging.info("Checkpoint directory exists, but does not contain any checkpoints. Aborting resume.")
@@ -63,6 +71,7 @@ def save_state(
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int,
+    save_full_state: bool = True,
 ):
     def save_assets(directory: epath.Path):
         # Save the normalization stats.
@@ -76,9 +85,10 @@ def save_state(
         train_state, params = _split_params(state)
     items = {
         "assets": save_assets,
-        "train_state": train_state,
         "params": {"params": params},
     }
+    if save_full_state:
+        items["train_state"] = train_state
     checkpoint_manager.save(step, items)
 
 
@@ -117,18 +127,12 @@ class Callback(Protocol):
 class CallbackHandler(ocp.AsyncCheckpointHandler):
     """A CheckpointHandler for calling an arbitrary function asynchronously. Only for saving, not for restoring."""
 
-    def __init__(self):
-        self._executor = futures.ThreadPoolExecutor(max_workers=1)
-
-    def close(self):
-        self._executor.shutdown()
-
-    def save(self, directory: epath.Path, args: "CallbackSave"):
+    def save(self, directory: epath.Path, args: CallbackSave):
         if jax.process_index() == 0:
             args.callback(directory)
 
-    async def async_save(self, directory: epath.Path, args: "CallbackSave") -> list[futures.Future]:
-        return [self._executor.submit(self.save, directory, args)]
+    async def async_save(self, directory: epath.Path, args: CallbackSave) -> list[futures.Future]:
+        return [future.CommitFutureAwaitingContractedSignals(asyncio.to_thread(self.save, directory, args))]
 
     def restore(self, *args, **kwargs):
         raise NotImplementedError("CallbackHandler does not support restore")
