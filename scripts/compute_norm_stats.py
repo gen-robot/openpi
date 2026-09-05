@@ -112,9 +112,16 @@ def main(config_name: str, max_frames: int | None = None, num_workers: int | Non
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    # For multi-dataset, concatenate dataset names with underscores
     repo_ids = [repo_id.strip() for repo_id in data_config.repo_id.split(",") if repo_id.strip()]
-    if len(repo_ids) > 1:
+    if data_config.asset_id:
+        # An explicit asset_id is what training reads back (config.py
+        # _load_norm_stats does assets_dir / asset_id), so it has to win here or
+        # the two sides point at different directories.
+        asset_name = data_config.asset_id
+    elif len(repo_ids) > 1:
+        # Joining the repo_ids blows past the 255-byte limit on a single path
+        # component once there are more than a handful of datasets; set
+        # AssetsConfig(asset_id=...) in the config instead.
         asset_name = "_".join(repo_ids)
     else:
         asset_name = data_config.repo_id

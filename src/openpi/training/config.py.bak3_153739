@@ -2025,12 +2025,16 @@ _CONFIGS = [
             # repo_id="make_whiskey_sour_ccw_0814_sft_perfect,make_whiskey_sour_ccw_0814_sft_suboptimal,make_whiskey_sour_ccw_0811_sft_perfect,make_whiskey_sour_ccw_0811_sft_suboptimal",
             # repo_id="make_whiskey_sour_ccw_0818_sft_pour_wine",
             # repo_id="make_whiskey_sour_ccw_0828_sft_move_jitter,make_whiskey_sour_ccw_0811_sft_perfect_crop,make_whiskey_sour_ccw_0811_sft_suboptimal_crop,make_whiskey_sour_ccw_0814_sft_perfect_crop,make_whiskey_sour_ccw_0814_sft_suboptimal_crop,make_whiskey_sour_ccw_0827_sft_perfect_crop,make_whiskey_sour_ccw_0827_sft_suboptimal_crop,make_whiskey_sour_xpc_0811_sft_perfect_crop,make_whiskey_sour_xpc_0811_sft_suboptimal_crop",
-            # 2026-09-03: SOP 简化后重采的一批, 之前 13 份语料全部作废。
-            # 259 + 55 = 314 eps / 916,897 帧, prompt 已改成 "Make a whiskey sour."
-            # (此前各份用的都是 ConvertArgs.task 的默认值, 即 bagging 的任务描述)。
-            repo_id="make_whiskey_sour_ccw_0903_sft_perfect,make_whiskey_sour_ccw_0903_sft_suboptimal",
+            repo_id="make_whiskey_sour_ccw_0828_sft_move_jitter,make_whiskey_sour_ccw_0811_sft_perfect_crop,make_whiskey_sour_ccw_0811_sft_suboptimal_crop,\
+                make_whiskey_sour_ccw_0814_sft_perfect_crop,make_whiskey_sour_ccw_0814_sft_suboptimal_crop,make_whiskey_sour_ccw_0827_sft_perfect_crop,make_whiskey_sour_ccw_0827_sft_suboptimal_crop,\
+                    make_whiskey_sour_xpc_0811_sft_perfect_crop,make_whiskey_sour_xpc_0811_sft_suboptimal_crop,\
+                    make_whiskey_sour_ccw_0818_sft_pour_wine,make_whiskey_sour_ccw_0818_sft_scoop_ice,make_whiskey_sour_ccw_0817_sft_pick_lemon,make_whiskey_sour_ccw_0818_sft_pour_mix",
+            # repo_id="make_whiskey_sour_xpc_0811_sft_perfect,make_whiskey_sour_xpc_0811_sft_suboptimal,make_whiskey_sour_ccw_0820_sft_move_jitter,make_whiskey_sour_ccw_0820_sft_move_jitter_pour_wine",
             mode="sm2sm",
-            assets=AssetsConfig(asset_id="make_whiskey_sour_ccw0903_sm2sm"), # asset_id 不写的话会默认取整个逗号拼接的 repo_id —— 数据集一多就超过
+            # Without this the asset_id defaults to the whole comma-joined
+            # repo_id, which past eight datasets exceeds the 255-byte limit on a
+            # single path component and fails with "File name too long".
+            assets=AssetsConfig(asset_id="make_whiskey_sour_crop8_0829_sm2sm"),
             state_history_size=3,
             state_future_size=2,
             # only_right_obs=True,
@@ -2042,8 +2046,11 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
         batch_size=128,
-        num_train_steps=30000,
-        exp_name="make_whiskey_sour_ccw0903ps_sm2sm",
+        num_train_steps=60_000,
+        # exp_name="make_whiskey_sour_xpc0811p0811s_sm2sm",
+        # exp_name="make_whiskey_sour_ccw0824mj_sm2sm",
+        # exp_name="make_whiskey_sour_xpc0811p0811s_ccw0820mj0820mjpw_sm2sm",
+        exp_name="make_whiskey_sour_xpc0811ps_ccw0811ps0814ps0827ps_ccw0817pl0818pwsipm0828mj_crop_sm2sm",
     ),
     # Fold towel tele + CFG-SFT (RLInf): matches checkpoints/.../00_cfg_towel_2node_...yaml
     # - actor.model.num_action_chunks / openpi.action_chunk: 20 (NOT checkpoint dir config.json;
@@ -2085,67 +2092,41 @@ _CONFIGS = [
     # live under /mnt/resource/robodojo_dataset/lerobot; a comma-separated
     # repo_id trains on the union, which is how expert and DAgger are mixed.
     #
-    # A controlled pair: identical except for the backbone and its base
-    # weights, so a success-rate gap on RoboDojo is attributable to pi0 vs
-    # pi05 and not to batch size, horizon or schedule.
-    #
-    # action_horizon=50 at 25 fps is a 1.0 s chunk, matching the real-robot
-    # configs (20 steps at 20 fps). Upstream RoboDojo used 50 = 2.0 s: on a
-    # task where a bowl topples in well under a second, committing that far
-    # open-loop is itself a plausible failure source, and it blurs what the
-    # DAgger takeovers are evidence of.
     TrainConfig(
         name="pi05_robodojo_stack_bowls_sft",
-        exp_name="robodojo_stack_bowls_sft_ep100_pi05",
+        exp_name="robodojo_stack_bowls_sft_ep100",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotRoboDojoArxX5DataConfig(
             repo_id="robodojo_stack_bowls_sft_ep100",
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi05_base/params"),
-        batch_size=128,
+        weight_loader=weight_loaders.CheckpointWeightLoader(tyro.MISSING),
     ),
     TrainConfig(
-        name="pi0_robodojo_stack_bowls_sft",
-        exp_name="robodojo_stack_bowls_sft_ep100_pi0",
-        model=pi0_config.Pi0Config(action_horizon=50),
-        data=LeRobotRoboDojoArxX5DataConfig(
-            repo_id="robodojo_stack_bowls_sft_ep100",
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
-        batch_size=128,
-    ),
-    # The other three tasks, pi0. batch_size is held at 128 across every
-    # RoboDojo run so success rates stay comparable between tasks; on the
-    # 4-card boxes that means 32 per device rather than 16.
-    TrainConfig(
-        name="pi0_robodojo_bottles_into_dustbin_sft",
-        exp_name="robodojo_bottles_into_dustbin_sft_ep100_pi0",
-        model=pi0_config.Pi0Config(action_horizon=50),
+        name="pi05_robodojo_bottles_into_dustbin_sft",
+        exp_name="robodojo_bottles_into_dustbin_sft_ep100",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotRoboDojoArxX5DataConfig(
             repo_id="robodojo_bottles_into_dustbin_sft_ep100",
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
-        batch_size=128,
+        weight_loader=weight_loaders.CheckpointWeightLoader(tyro.MISSING),
     ),
     TrainConfig(
-        name="pi0_robodojo_fill_pen_holder_sft",
-        exp_name="robodojo_fill_pen_holder_sft_ep100_pi0",
-        model=pi0_config.Pi0Config(action_horizon=50),
+        name="pi05_robodojo_fill_pen_holder_sft",
+        exp_name="robodojo_fill_pen_holder_sft_ep100",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotRoboDojoArxX5DataConfig(
             repo_id="robodojo_fill_pen_holder_sft_ep100",
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
-        batch_size=128,
+        weight_loader=weight_loaders.CheckpointWeightLoader(tyro.MISSING),
     ),
     TrainConfig(
-        name="pi0_robodojo_classify_objects_sft",
-        exp_name="robodojo_classify_objects_sft_ep100_pi0",
-        model=pi0_config.Pi0Config(action_horizon=50),
+        name="pi05_robodojo_classify_objects_sft",
+        exp_name="robodojo_classify_objects_sft_ep100",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
         data=LeRobotRoboDojoArxX5DataConfig(
             repo_id="robodojo_classify_objects_sft_ep100",
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/public/datasets/pretrained-checkpoints/openpi-assets/checkpoints/pi0_base/params"),
-        batch_size=128,
+        weight_loader=weight_loaders.CheckpointWeightLoader(tyro.MISSING),
     ),
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
