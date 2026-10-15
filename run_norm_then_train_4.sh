@@ -9,7 +9,7 @@ mkdir -p "$HF_DATASETS_CACHE" "$HF_HUB_CACHE"
 export PATH=/usr/local/cuda/bin:$PATH
 export XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda
 
-export CONFIG_NAME="bagging_sku_0821_sm2sm"
+export CONFIG_NAME="bagging_sku_0825_sm2sm"
 
 # 归一化
 CUDA_VISIBLE_DEVICES=0,1,2,3 uv run --no-sync scripts/compute_norm_stats.py --config-name ${CONFIG_NAME} 

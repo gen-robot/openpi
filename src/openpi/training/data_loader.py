@@ -120,6 +120,24 @@ class FilteredLeRobotDataset(lerobot_dataset.LeRobotDataset):
         return super()._query_videos(query_timestamps, ep_idx)
 
 
+class _VideoFreeDatasetMixin:
+    """Skip video decoding while preserving the sample schema for non-image transforms."""
+
+    def _query_videos(self, query_timestamps: dict[str, list[float]], ep_idx: int):
+        del ep_idx
+        # Norm-stat computation only consumes state/actions. A tiny HWC placeholder
+        # keeps existing repack and policy transforms unchanged without decoding MP4s.
+        return {key: torch.zeros((1, 1, 3), dtype=torch.uint8) for key in query_timestamps}
+
+
+class VideoFreeLeRobotDataset(_VideoFreeDatasetMixin, lerobot_dataset.LeRobotDataset):
+    pass
+
+
+class VideoFreeFilteredLeRobotDataset(_VideoFreeDatasetMixin, FilteredLeRobotDataset):
+    pass
+
+
 class MultiDataset(Dataset[T_co]):
     """Dataset that combines multiple LeRobot datasets."""
     
@@ -247,6 +265,8 @@ def create_torch_dataset(
     split: Literal["train", "val"] | None = None,
     val_ratio: float = 0.1,
     split_seed: int = 42,
+    *,
+    load_videos: bool = True,
 ) -> Dataset:
     """Create a dataset for training.
     
@@ -307,13 +327,15 @@ def create_torch_dataset(
         # Use FilteredLeRobotDataset only when episodes are filtered (split is not None)
         # Otherwise use original LeRobotDataset to avoid any potential issues
         if episodes is not None:
-            dataset = FilteredLeRobotDataset(
+            dataset_cls = FilteredLeRobotDataset if load_videos else VideoFreeFilteredLeRobotDataset
+            dataset = dataset_cls(
                 data_config.repo_id,
                 delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
                 episodes=episodes,
             )
         else:
-            dataset = lerobot_dataset.LeRobotDataset(
+            dataset_cls = lerobot_dataset.LeRobotDataset if load_videos else VideoFreeLeRobotDataset
+            dataset = dataset_cls(
                 data_config.repo_id,
                 delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
             )
@@ -376,13 +398,15 @@ def create_torch_dataset(
             
         # Create dataset
         if episodes is not None:
-            dataset = FilteredLeRobotDataset(
+            dataset_cls = FilteredLeRobotDataset if load_videos else VideoFreeFilteredLeRobotDataset
+            dataset = dataset_cls(
                 repo_id,
                 delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
                 episodes=episodes,
             )
         else:
-            dataset = lerobot_dataset.LeRobotDataset(
+            dataset_cls = lerobot_dataset.LeRobotDataset if load_videos else VideoFreeLeRobotDataset
+            dataset = dataset_cls(
                 repo_id,
                 delta_timestamps=_build_delta_timestamps(dataset_meta.fps),
             )

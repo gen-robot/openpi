@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 
 import einops
@@ -154,7 +155,7 @@ class Pi0(_model.BaseModel):
             if state.ndim == 2:
                 state = state[:, None, :]
             num_state_tokens = state.shape[1]
-            
+
             state_tokens = self.state_proj(state)
             tokens.append(state_tokens)
             input_mask.append(jnp.ones((state.shape[0], num_state_tokens), dtype=jnp.bool_))
@@ -281,3 +282,72 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+    def sample_action_groups(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        num_steps: int | at.Int[at.Array, ""] = 10,
+        noise: at.Float[at.Array, "b k ah ad"],
+    ) -> at.Float[at.Array, "b k ah ad"]:
+        """Sample K action chunks per observation while sharing the expensive prefix pass.
+
+        This is intended for uncertainty estimation. Images and prompt tokens are encoded once
+        per observation; only the action-expert suffix is evaluated for every noise sample.
+        """
+        del rng  # Noise is supplied by the caller so sampling remains reproducible.
+        observation = _model.preprocess_observation(None, observation, train=False)
+        batch_size, num_samples = noise.shape[:2]
+        if observation.state.shape[0] != batch_size:
+            raise ValueError(
+                f"Observation batch ({observation.state.shape[0]}) does not match noise batch ({batch_size})"
+            )
+
+        dt = -1.0 / num_steps
+
+        # Encode each image/prompt prefix only once instead of K times.
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+
+        flat_batch_size = batch_size * num_samples
+        repeated_state = jnp.repeat(observation.state, num_samples, axis=0)
+        repeated_observation = dataclasses.replace(observation, state=repeated_state)
+        repeated_prefix_mask = jnp.repeat(prefix_mask, num_samples, axis=0)
+        # Gemma stacks layers before batch: cache shape is [layers, batch, tokens, heads, dim].
+        repeated_kv_cache = jax.tree.map(lambda value: jnp.repeat(value, num_samples, axis=1), kv_cache)
+
+        def step(carry):
+            x_t, time = carry
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
+                repeated_observation, x_t, jnp.broadcast_to(time, flat_batch_size)
+            )
+            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+            suffix_to_prefix_mask = einops.repeat(
+                repeated_prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1]
+            )
+            full_attn_mask = jnp.concatenate([suffix_to_prefix_mask, suffix_attn_mask], axis=-1)
+            positions = (
+                jnp.sum(repeated_prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+            )
+
+            (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+                [None, suffix_tokens],
+                mask=full_attn_mask,
+                positions=positions,
+                kv_cache=repeated_kv_cache,
+                adarms_cond=[None, adarms_cond],
+            )
+            assert prefix_out is None
+            velocity = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            return x_t + dt * velocity, time + dt
+
+        def cond(carry):
+            _, time = carry
+            return time >= -dt / 2
+
+        flat_noise = noise.reshape(flat_batch_size, self.action_horizon, self.action_dim)
+        samples, _ = jax.lax.while_loop(cond, step, (flat_noise, 1.0))
+        return samples.reshape(batch_size, num_samples, self.action_horizon, self.action_dim)
